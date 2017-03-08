@@ -1,0 +1,749 @@
+---
+title: "Apartment List Rentonomics"
+author: "Christine Quan"
+date: "February 20, 2017"
+output:
+  word_document:
+    toc: yes
+  html_document:
+    number_sections: yes
+    theme: cerulean
+    toc: yes
+    toc_float:
+      collapsed: yes
+      smooth_scroll: no
+---
+
+```{r, include=FALSE}
+# importing libraries
+library(readr)
+library(tidyr)
+library(dplyr)
+library(stringr)
+library(purrr)
+library(ggplot2)
+library(knitr)
+
+opts_chunk$set(comment = NA, fig.width = 5, fig.height = 5, fig.align = 'center')
+```
+
+```{r}
+#reading in data and initial exploration
+data <- read_csv("Data.csv")
+summary(data)
+head(data)
+data %>% count(Category)
+data %>% count(Location)
+```
+
+
+To make the data easier to work with later (i.e. instead of having to rewrite filters each time),
+I will create indicator variables and new columns to parse out the Category column.
+This is a relatively small data set so I am not too worried about increasing the number of columns.
+
+_Data Quirks_
+
+Some Cities/Category combinations have Population = NA (notably all of those have
+the category "Owner: Native Hawaiian and Other Pacific Islander Householder").
+I am assuming these cities do not a people who identify with those ethnicities.
+
+From my initial exploration (see Appendix for quick scratch work), I see that each 
+age group was mutually exclusive but race was not (especially with the 2+ races).
+Therefore, there was double counting within race.
+
+_Programming Note_
+
+In terms of coding style, I will refrain from writing functions or loops
+so as to ensure each code chunk can be read and understood more or less independently
+of all the other code chunks. In addition, the plots used in this report will 
+not be polished with title-cased axes titles as they are mostly intended
+for exploratory purposes. This will not be the most polished in terms of style.
+
+```{r}
+df <- data %>%
+  mutate(own_or_rent = ifelse(str_detect(Category, "Rent"), yes = "Rent", no = "Own"),
+         age_group = str_extract(Category, "\\d{2}-(\\d{2})?"),
+         totals = ifelse(str_detect(Category, "units"), yes = 1, no = 0), # geographical totals
+         race = str_trim(str_extract(Category, 
+                            "(?<=(Renter: |Owner: ))[:print:]+(?=(Household)[:alpha:]*)"))
+  )
+
+```
+
+
+# Growth Rate of Owner and Renter Populations
+
+Here, I will use the Population who have renter or owner occupied units as the unit to measure growth. I define growth rate from 2006 to 2012 as the number of units in 2012 minus the number of units in 2006 taken as a percetage of the number of units in 2006.
+
+I filtered to just the "location" of United States (which I assume
+provides the country-level aggregated value).
+
+In addition to calculating the percent change since 2006, I also calculated the
+year over year percent change as well.
+
+
+## Owner Population - Growth Rate (2006 - 2012)
+```{r}
+own_growth <- df %>% filter(totals == 1,
+                         own_or_rent == "Own",
+                         Location == "United States") %>%
+  arrange(Year) %>%
+  mutate(yoy_percent = 
+           (Population - lag(Population, default = first(Population)))
+         /lag(Population, default = first(Population))*100,
+         percentchangefrom2006 = (Population - first(Population))/first(Population)*100)
+
+print(own_growth %>% select(Year, Population, yoy_percent, percentchangefrom2006),
+      row.names = FALSE)
+
+own_growth %>% ggplot(mapping = aes(x = Year, y = Population)) +
+  geom_point() +
+  geom_line()
+
+```
+
+From 2006 to 2012, there was a -1.29% growth rate in owner-occupied units. 
+So less people have owner-occupied units in 2012 than in 2006.
+Looking at the year-over-year growth rate reveal that apart from an increase
+between 2006 and 2007, there has been a steady decline of people with owner-occupied units.
+
+## Renter Population - Growth Rate (2006 - 2012)
+```{r}
+rent_growth <- df %>% filter(totals == 1,
+                         own_or_rent == "Rent",
+                         Location == "United States") %>%
+  arrange(Year) %>%
+  mutate(yoy_percent = 
+           (Population - lag(Population, default = first(Population)))
+         /lag(Population, default = first(Population))*100,
+         percentchangefrom2006 = (Population - first(Population))/first(Population)*100)
+
+print(rent_growth %>% select(Year, Population, yoy_percent, percentchangefrom2006),
+      row.names = FALSE)
+
+rent_growth %>% ggplot(mapping = aes(x = Year, y = Population)) +
+  geom_point() +
+  geom_line()
+```
+
+On the other hand, there has been a 14.6% growth rate in renter-occupied units
+from 2006 to 2012. Looking at the year over year change reveals that aside from
+a decline between 2008 and 2009, there has been a general increase in
+renter occupied units.
+
+That being said, there is still about double the amount of owner-occupied units
+than renter-occupied units. 
+
+## Combining Renting and Ownership
+```{r}
+all <- left_join(rent_growth, own_growth, by = c("Year"), suffix = c("_rent", "_growth")) %>%
+  select(Year, Population_rent, Population_growth)
+
+all %>% 
+  gather(key = type, value = Population, -Year) %>%
+  ggplot(mapping = aes(x = Year, y = Population, color = type)) +
+  geom_point() +
+  geom_line()
+```
+
+# Home Ownerships has decreased the most with...
+
+## All Categories
+```{r}
+allcat <- df %>% filter(!is.na(Population), #Population is NA for some races in certain locations
+              own_or_rent == "Own",
+              totals == 0) %>%  #filter out the aggregates
+  group_by(Category, Year) %>%
+  summarise(Population = sum(Population)) %>%
+  group_by(Category) %>%
+  arrange(Year) %>%
+  mutate(yoy_percent = 
+           (Population - lag(Population, default = first(Population)))
+         /lag(Population, default = first(Population))*100,
+         percentchangefrom2006 = (Population - first(Population))/first(Population)*100)
+
+# to get the % change in 2012 (since 2006)
+print(allcat %>%
+        filter(Year == 2012) %>%
+        select(Category, percentchangefrom2006) %>%
+        arrange(percentchangefrom2006),
+      row.names = FALSE)
+```
+
+Taking a quick look at all of the categories, it appears that age groups tend
+to be indicator of signifcant change in home ownership.
+
+Let's explore all of the catgories in detail...
+
+## Age
+```{r}
+age <- df %>% filter(!is.na(age_group),
+              own_or_rent == "Own",
+              Location == "United States") %>%
+  group_by(age_group) %>%
+  arrange(Year) %>%
+   mutate(yoy_percent = 
+           (Population - lag(Population, default = first(Population)))
+         /lag(Population, default = first(Population))*100,
+         percentchangefrom2006 = (Population - first(Population))/first(Population)*100)
+
+# to get the % change in 2012 (since 2006)
+print(age %>%
+        filter(Year == 2012) %>%
+        select(age_group, percentchangefrom2006),
+      row.names = FALSE)
+```
+
+ While age groups containing those older than 55 years old showed an increase in
+ home ownership between between 2006 and 2012, those who belong to the age groups that are younger than 55 years old actually eperienced a decline in home ownership during this time period.
+ 
+ In particularly, the 15-24 age group experienced the highest decrease in 
+ home ownership between 2006 and 2012 with  a drop in 39.2%
+ 
+ 
+```{r, fig.height=8, fig.width=8}
+age %>% 
+  ggplot(mapping = aes(x = Year, y = Population, color = age_group)) +
+  geom_point() +
+  geom_line()
+
+# Rental Proportions
+age_prop <- df %>% filter(!is.na(age_group),
+              Location == "United States") %>%
+  group_by(age_group, Year) %>%
+  mutate(percent_rent = Population/sum(Population))
+
+age_prop %>% 
+  ggplot(mapping = aes(x = Year, y = percent_rent,
+                       color = own_or_rent)) +
+  geom_point() +
+  geom_line() +
+  facet_wrap(~age_group, nrow = 2) +
+   theme(axis.text.x = element_text(angle = 25, hjust = 1))
+```
+
+While this chart might be a little dense, it does illuminate the fact a few interesting ideas:
+
+1. the two youngset age groups (15-24) and (25-34) have a higher proportion of renters and buyers.For these two groups, the lines are also diverging, showing that over time, there seems to be an increase of the population with rental units.
+
+2. In the second row, particularly for the 65+ age group, there appears to be 
+a stable renting/buying habit as the proportions have not changed at all over time
+for these age groups.
+
+3. For the middle age groups (especially with the 35-44 age group), there appears
+to be a trend of decreasing ownership and increasing rentalship. It is possible
+that after 2012, the proportion of renters could exceed the proprtion of buyers
+for these age groups.
+
+## Ethnicty
+```{r}
+race <- df %>% filter(!is.na(race),
+              own_or_rent == "Own",
+              Location == "United States") %>%
+  group_by(race) %>%
+  arrange(Year) %>%
+   mutate(yoy_percent = 
+           (Population - lag(Population, default = first(Population)))
+         /lag(Population, default = first(Population))*100,
+         percentchangefrom2006 = (Population - first(Population))/first(Population)*100)
+
+# to get the % change in 2012 (since 2006)
+print(race %>%
+        filter(Year == 2012) %>%
+        select(race, percentchangefrom2006) %>%
+        arrange(percentchangefrom2006),
+      row.names = FALSE)
+```
+
+Those who identified as "Some Other Race," "Non Hispanic White," or "African American"
+showed a decrease in home ownernship between 2006 and 2012. 
+
+Overall, if we divide the population by race, there is very little change overall.
+Asians and Hispanics showed above 5% increase in home ownership.
+
+However, the most interesting changes are those that are less racially identifiable (i.e.
+those who identified as "Two or More Races" or  "Some Other Race").
+Those who identify as "Two or More Races" showed the highest increase in home ownership
+while those who identify as "Some Other Race" showed the greatest decrease (38.7%) in terms
+of home ownership.
+
+```{r, fig.width=8, fig.height=8}
+# Rental Proportions
+age_prop <- df %>% filter(!is.na(race),
+              Location == "United States") %>%
+  group_by(race, Year) %>%
+  mutate(percent_rent = Population/sum(Population))
+
+age_prop %>% 
+  ggplot(mapping = aes(x = Year, y = percent_rent,
+                       color = own_or_rent)) +
+  geom_point() +
+  geom_line() +
+  facet_wrap(~race)
+```
+
+Again, it is interesting to note the longitudinally diverging or converging lines of 
+rentalship or ownership proprtions. 
+
+## Location
+ 
+There are thirty different cities in this data set.
+
+```{r}
+cities <- df %>% filter(!is.na(Population), #Population is NA for some races in certain locations
+              own_or_rent == "Own",
+              totals  == 1, # to just get the city- evel aggregates
+              Location != "United States" ) %>% #filter out the aggregate data and just get cities
+  group_by(Location) %>%
+  arrange(Year) %>%
+   mutate(yoy_percent = 
+           (Population - lag(Population, default = first(Population)))
+         /lag(Population, default = first(Population))*100,
+         percentchangefrom2006 = (Population - first(Population))/first(Population)*100)
+
+# to get the % change in 2012 (since 2006)
+print(cities %>%
+        filter(Year == 2012) %>%
+        select(Location, percentchangefrom2006) %>%
+        arrange(percentchangefrom2006),
+      row.names = FALSE)
+```
+
+Grouping by cities don't reveal as large of changes as age. All of the changes were
+less than 10%. Detroit did show the largest decrease in home ownership at 9.89%.
+The Texan cities showed the most increase in home ownership.
+
+```{r, fig.width=8, fig.height=8}
+# Rental Proportions
+loc_prop <- df %>% filter(!is.na(Population),
+                          totals == 1,
+              Location != "United States") %>%
+  group_by(Location, Year) %>%
+  mutate(percent_rent = Population/sum(Population))
+
+loc_prop %>% 
+  ggplot(mapping = aes(x = Year, y = percent_rent,
+                       color = own_or_rent)) +
+  geom_point() +
+  geom_line() +
+  facet_wrap(~Location) +
+  theme(axis.text.x = element_text(angle = 25, hjust = 1))
+```
+
+In no city but Los Angeles (for the time period between 2006 and 2012) has
+the number of renters exceeded the number of homebuyers. However, all cities seem
+to be show an increasing proportion of renters. In 2012, Las Vegas, New York,
+and San Francisco all seem on the brink of having more renters than buyers.
+
+
+# Where are renters moving to? 
+
+I am interpreting this question as: 
+what cities have seen the highest growth of renters between 2006 and 2012? 
+
+With that question in mind, the analysis is similar to what I did
+in the previous section. The conclusions will be limited since we only have
+thirty cities in this dataset.
+
+```{r}
+cities <- df %>% filter(!is.na(Population), #Population is NA for some races in certain locations
+              own_or_rent == "Rent",
+              totals  == 1, # to just get the city- evel aggregates
+              Location != "United States" ) %>% #filter out the aggregate data and just get cities
+  group_by(Location) %>%
+  arrange(Year) %>%
+   mutate(yoy_percent = 
+           (Population - lag(Population, default = first(Population)))
+         /lag(Population, default = first(Population))*100,
+         percentchangefrom2006 = (Population - first(Population))/first(Population)*100)
+
+# to get the % change in 2012 (since 2006)
+print(cities %>%
+        filter(Year == 2012) %>%
+        select(Location, percentchangefrom2006) %>%
+        arrange(desc(percentchangefrom2006)),
+      row.names = FALSE)
+```
+
+The top three cities that have seen the hightest growth of renters between 2006 and 2012 are:
+
+1. Phoenix, AZ
+2. San Antonio, TX
+3. Minneapolis, MN
+
+
+## Renter Movement by All Categories
+```{r}
+cities <- df %>% filter(!is.na(Population), #Population is NA for some races in certain locations
+              own_or_rent == "Rent",
+              totals  == 0, # to just get the city- evel aggregates
+              Location != "United States" ) %>% #filter out the aggregate data and just get cities
+  group_by(Location, Category, Year) %>%
+  summarise(Population = sum(Population)) %>%
+  group_by(Location, Category) %>%
+  arrange(Year) %>%
+  mutate(yoy_percent = 
+           (Population - lag(Population, default = first(Population)))
+         /lag(Population, default = first(Population))*100,
+         percentchangefrom2006 = (Population - first(Population))/first(Population)*100)
+
+# to get the % change in 2012 (since 2006)
+print(cities %>%
+        filter(Year == 2012) %>%
+        select(Location, Category, percentchangefrom2006) %>%
+        arrange(desc(percentchangefrom2006)),
+      row.names = FALSE)
+```
+
+## Renter Movement by Age Group
+
+I am interpreting this question as when faceting by age group and location,
+which combinations of age group and location show the higest renter growth
+from 2006 to 2012. 
+```{r}
+cities_age <- df %>% filter(!is.na(Population), #Population is NA for some races in certain locations
+              own_or_rent == "Rent",
+              totals  == 0, # to just get the city- evel aggregates
+              !is.na(age_group), # just to look at age groups
+              Location != "United States" ) %>% #filter out the aggregate data and just get cities
+  group_by(age_group, Location, Year) %>%
+  summarise(Population = sum(Population)) %>%
+  group_by(age_group, Location) %>%
+  arrange(Year) %>%
+  mutate(yoy_percent = 
+           (Population - lag(Population, default = first(Population)))
+         /lag(Population, default = first(Population))*100,
+         percentchangefrom2006 = (Population - first(Population))/first(Population)*100)
+
+# to get the % change in 2012 (since 2006)
+print(cities_age %>%
+        filter(Year == 2012) %>%
+        select(age_group, Location, percentchangefrom2006) %>%
+        arrange(desc(percentchangefrom2006)),
+      row.names = FALSE)
+```
+
+The 60-64 age group appear to have the highest growth by city. 
+The top five cities that this renter age group is moving into are:
+
+1. Riverside, CA
+2. Phoenix, AZ
+3. Minneapolis, MN
+4. Cincinatti, OH
+5. Sacramento, CA
+
+```{r, fig.height=7, fig.width=7}
+cities_age %>%
+  ggplot(mapping = aes(x = age_group, y = Location)) +
+  geom_tile(aes(fill = percentchangefrom2006)) +
+  scale_fill_gradient2(low = "darkred", mid = "white", high = "forestgreen",
+                       midpoint =  0) +
+  theme(axis.text.x = element_text(angle = 25, hjust = 1))
+```
+
+
+1. The youngest age group (15-24) does not appear to be moving into these 30 cities.
+For this group, the growth rate of renters only increased in Dallas, Detroit, and Portland.
+
+2. Compared to the remaining age groups, the 75 - 84 age group also don't seem
+to be renting in these cities either.
+
+## Renter Movement by Ethnicity
+
+I am interpreting this question as when faceting by enthnicity and location,
+which combinations of age group and location show the higest renter growth
+from  2006 to 2012. 
+```{r}
+cities_eth <- df %>% filter(!is.na(Population), #Population is NA for some races in certain locations
+              own_or_rent == "Rent",
+              totals  == 0, # to just get the city- evel aggregates
+              !is.na(race), # just to look at age groups
+              Location != "United States" ) %>% #filter out the aggregate data and just get cities
+  group_by(race, Location, Year) %>%
+  summarise(Population = sum(Population)) %>%
+  group_by(race, Location) %>%
+  arrange(Year) %>%
+  mutate(yoy_percent = 
+           (Population - lag(Population, default = first(Population)))
+         /lag(Population, default = first(Population))*100,
+         percentchangefrom2006 = (Population - first(Population))/first(Population)*100)
+
+# to get the % change in 2012 (since 2006)
+print(cities_eth %>%
+        filter(Year == 2012) %>%
+        select(race, Location, percentchangefrom2006) %>%
+        arrange(desc(percentchangefrom2006)),
+      row.names = FALSE)
+```
+
+Those who identified as "Two or More Races" or "American Indian and Alaska Native"
+appear to be moving the most into these 30 cities.
+
+```{r, fig.width=7, fig.height=7}
+cities_eth %>%
+  ggplot(mapping = aes(x = race, y = Location)) +
+  geom_tile(aes(fill = percentchangefrom2006)) +
+  scale_fill_gradient2(low = "darkred", mid = "white", high = "forestgreen",
+                       midpoint =  0) +
+  theme(axis.text.x = element_text(angle = 25, hjust = 1))
+```
+
+Those who identified as "Some Other Race" do not appear to be moving into these
+particular cities in 2012 compared to 2006.
+
+# Four Cities - Population and Housing Trends
+
+## Dallas
+
+```{r}
+cities_age <- df %>% filter(!is.na(Population), 
+              own_or_rent == "Rent",
+              totals  == 0, # to just get the city- evel aggregates
+              age_group == "15-24", # just to look at age groups
+              Location != "United States" ) %>% #filter out the aggregate data and just get cities
+  group_by(age_group, Location, Year) %>%
+  summarise(Population = sum(Population)) %>%
+  group_by(age_group, Location) %>%
+  arrange(Year) %>%
+  mutate(yoy_percent = 
+           (Population - lag(Population, default = first(Population)))
+         /lag(Population, default = first(Population))*100,
+         percentchangefrom2006 = (Population - first(Population))/first(Population)*100)
+
+# to get the % change in 2012 (since 2006)
+print(cities_age %>%
+        filter(Year == 2012) %>%
+        select(age_group, Location, percentchangefrom2006) %>%
+        arrange(desc(percentchangefrom2006)),
+      row.names = FALSE)
+```
+
+```{r}
+cities <- df %>% filter(!is.na(Population), #Population is NA for some races in certain locations
+              own_or_rent == "Own",
+              totals  == 1, # to just get the city- evel aggregates
+              Location != "United States" ) %>% #filter out the aggregate data and just get cities
+  group_by(Location) %>%
+  arrange(Year) %>%
+   mutate(yoy_percent = 
+           (Population - lag(Population, default = first(Population)))
+         /lag(Population, default = first(Population))*100,
+         percentchangefrom2006 = (Population - first(Population))/first(Population)*100)
+
+# to get the % change in 2012 (since 2006)
+print(cities %>%
+        filter(Year == 2012) %>%
+        select(Location, percentchangefrom2006) %>%
+        arrange(desc(percentchangefrom2006)),
+      row.names = FALSE)
+```
+
+In 2012, 15-24 year old renters do not appear to growing in any major cities but Dallas. Dallas is one of three few cities (the other two being Portland and Detroit) that saw an increase over 1 percent in 15-24 year old renters in 2012. In fact, Dallas also led the board in 2010 and only came in second to Cleveland in 2011.  Dallas also placed sixth among major cities with the highest amount of renter growth overall in 2012. 
+
+The number of renters may be increasing, but the number of homebuyers are as well. Texan cities (Houston, San Antonio, and Dallas) showed the strongest increase in homeownership amongst all major cities in the United States from 2006 to 2012. 
+
+
+## Los Angeles
+
+```{r}
+LA_age <- df %>% filter(!is.na(Population), #Population is NA for some races in certain locations
+              own_or_rent == "Own",
+              totals  == 0, # to just get the city- evel aggregates
+              !is.na(age_group), # just to look at age groups
+              Location == "Los Angeles, CA" ) %>% 
+  group_by(age_group, Location, Year) %>%
+  summarise(Population = sum(Population)) %>%
+  group_by(age_group, Location) %>%
+  arrange(Year) %>%
+  mutate(yoy_percent = 
+           (Population - lag(Population, default = first(Population)))
+         /lag(Population, default = first(Population))*100,
+         percentchangefrom2006 = (Population - first(Population))/first(Population)*100)
+
+# to get the % change in 2012 (since 2006)
+print(LA_age %>%
+        filter(Year == 2012) %>%
+        select(age_group, Location, percentchangefrom2006) %>%
+        arrange(desc(percentchangefrom2006)),
+      row.names = FALSE)
+```
+
+```{r}
+LA_age <- df %>% filter(!is.na(Population), #Population is NA for some races in certain locations
+              own_or_rent == "Rent",
+              totals  == 0, # to just get the city- evel aggregates
+              !is.na(age_group), # just to look at age groups
+              Location == "Los Angeles, CA" ) %>% 
+  group_by(age_group, Location, Year) %>%
+  summarise(Population = sum(Population)) %>%
+  group_by(age_group, Location) %>%
+  arrange(Year) %>%
+  mutate(yoy_percent = 
+           (Population - lag(Population, default = first(Population)))
+         /lag(Population, default = first(Population))*100,
+         percentchangefrom2006 = (Population - first(Population))/first(Population)*100)
+
+# to get the % change in 2012 (since 2006)
+print(LA_age %>%
+        filter(Year == 2012) %>%
+        select(age_group, Location, percentchangefrom2006) %>%
+        arrange(desc(percentchangefrom2006)),
+      row.names = FALSE)
+```
+
+
+Los Angeles is a city distinguished by many things: Hollywood, Beverley Hills, boardwalks and beaches. As of 2012, LA is also the only city (in a list of thirty major cities) that has a higher percentage of renters than homebuyers. 
+
+Between 2006 and 2012, renting increased with older age groups seeing the largest growth in renting. But age is not only correlated with more renting, but more home ownership as well. Those that belong to a 60+ age group have seen an increase in home ownership. These trends are quite different from those who belong to younger age groups.
+
+Despite LA being home to USC and UCLA, renting among the 15-24 age group has decreased by 10.8 percent between 2006 and 2012, higher than the 7.8 percent national decrease for this age group. While this group has seen the highest decrease in homeownership in the nation between 2006 and 2012, they don’t seem to be renting either. It is possible that this group is still staying at home with their parents. 
+
+
+## Phoenix
+
+```{r}
+own_growth <- df %>% filter(totals == 1,
+                         #own_or_rent == "Rent",
+                         Location == "Phoenix, AZ") %>%
+  arrange(Year) %>%
+  mutate(yoy_percent = 
+           (Population - lag(Population, default = first(Population)))
+         /lag(Population, default = first(Population))*100,
+         percentchangefrom2006 = (Population - first(Population))/first(Population)*100)
+
+print(own_growth %>% select(Year, Population, yoy_percent, percentchangefrom2006),
+      row.names = FALSE)
+
+own_growth %>% ggplot(mapping = aes(x = Year, y = Population, color = own_or_rent)) +
+  geom_point() +
+  geom_line()
+```
+
+Sunny Phoenix, Arizona saw the highest renter growth between 2006 and 2012. The Valley of the Sun, with its temperate weather famously (like the rest of Arizona) does not observe Daylight Savings Time. Blessed with abundant sunshine and warm weather, the city seems to be a great place to live. 
+The population of 60-64 year old renters has nearly doubled between 2006 and 2012, making it the city with the second highest increase of 60-64 renter growth in the nation, just after Riverside, California.
+
+Like most other large cities in the nation, Phoenix still has a higher number of homeowners than renters. However, the gap appears to be closing as the number of homeowners decrease over time and the number of renters increase. Renters appear to be increasing at a faster rate than homeownership is dropping. 
+
+## Las Vegas
+
+```{r}
+cities_age <- df %>% filter(!is.na(Population), #Population is NA for some races in certain locations
+              own_or_rent == "Own",
+              totals  == 0, # to just get the city- evel aggregates
+              !is.na(age_group), # just to look at age groups
+              Location != "United States" ) %>% #filter out the aggregate data and just get cities
+  group_by(age_group, Location, Year) %>%
+  summarise(Population = sum(Population)) %>%
+  group_by(age_group, Location) %>%
+  arrange(Year) %>%
+  mutate(yoy_percent = 
+           (Population - lag(Population, default = first(Population)))
+         /lag(Population, default = first(Population))*100,
+         percentchangefrom2006 = (Population - first(Population))/first(Population)*100)
+
+# to get the % change in 2012 (since 2006)
+print(cities_age %>%
+        filter(Year == 2012) %>%
+        select(age_group, Location, percentchangefrom2006) %>%
+        arrange(desc(percentchangefrom2006)),
+      row.names = FALSE)
+```
+
+
+Las Vegas is known for its vibrant casinos and neon streets teeming with revelers. Lesser known about the city is the fact that it boasts the highest increase in homeownership amongst the 85+ age group. While this age group has seen an increase in home ownership in many cities (Houston, Dallas, Sacramento, Minneapolis), Las Vegas is the only major city where that population of homeowners has more than doubled. 
+
+But the city is not just becoming more attractive to older homebuyers, it also seems to be an attractive place to rent. In fact, Las Vegas is one of the few cities where recently the proportion of renters is just about equal the proportion of homeowners. Overall, Las Vegas also saw the fourth highest renter growth between 2006 and 2012 (after, Phoenix, San Antonio, and Minneapolis). Interestingly, Las Vegas is also only one of three cities during this time to see a strong increase in Asian renters (the other two cities being San Antonio and Tampa). Although usually a tourist destination, many people seem to be increasingly calling Las Vegas home. 
+
+
+
+# Three+ Ideas
+
+## College Towns
+
+College students and new grads make up a large market of renters. I am interested
+in writing about which cities are the friendliest for college renters (walkable,
+active/urban life, economical, etc).
+
+It might also be interesting to group cities by the different sporting leagues 
+there are in (ex: Pac 12, Big 10, etc).
+
+## Superbowl
+
+Although the Superbowl was a few week's ago, it would have been interesting to 
+do a scorecard for each of the cities involved (for the two teams and perhaps
+the host city). 
+
+## Most Instagrammable/Tweetable
+
+Pulling from instagram's or twitter's API, what is the general sentiment of 
+different cities where Apartment List operates? What are people posting about
+these cities? 
+
+# US Housing Crisis
+
+The current US housing system is among one of the largest dangers to the global economy. Worth trillions of dollars, the US housing market is the world’s largest asset class but the mortgage debt that powers this asset class is also the largest concentration of risk in the world. Why?
+
+After the housing and financial crisis that transpired in 2008, the US government stepped in to guarantee housing mortgages in order to protect investors from defaulting homeowners. As a legacy of that system, the government currently underwrites a majority of the housing mortgages in the United States. It seems like a win-win situation: investors get a low-risk investment and homeowners have access to an affordable mortgage, funded by taxpayers. Since the government is able to promise such low fees, private banks and financial institutions are unable to compete and have since mostly withdrawn from the mortgage game. That means US taxpayers are shouldering most of risk and burden involved, should homeowners decide to default.  
+
+To address the imbalance of risk and reward, economists have suggested that the US government charge a higher fee so that the fee matches the risk involved. However, Congress is gridlocked and unable to enact change – especially change that will make it more difficult for prospective homeowners to buy a house.
+
+
+# APPENDIX (Scratch Work) 
+
+Trying to understand how the data is structured
+```{r}
+tmp2006 <- data %>%
+    filter(str_detect(str_to_lower(Category), "units"),
+         Location == "United States",
+         Year == 2006) 
+sum(tmp2006$Population)
+
+tmp <- data %>%
+  filter(str_detect(str_to_lower(Category), "units"),
+         Location == "United States") 
+sum(tmp$Population)
+
+# 111617402 2006
+# 795236421 all
+
+##### second check: are ages discrete and sum to total
+
+tmp2006 <- data %>%
+  filter(str_detect(Category, "\\d"),
+         Location == "United States",
+         Year == 2006)
+sum(tmp2006$Population)
+
+tmp <- data %>%
+  filter(str_detect(Category, "\\d"),
+         Location == "United States") 
+sum(tmp$Population)
+
+# 111617402 2006
+# 796241621 all
+```
+
+```{r}
+# df <- data %>%
+#   mutate(own_or_rent = ifelse(str_detect(Category, "Rent"), yes = "Rent", no = "Own"),
+#          age_group = str_extract(Category, "\\d{2}-(\\d{2})?"))
+# 
+# df %>% filter(is.na(age_group)) %>% count(Category)
+# 
+# data %>%
+#   filter(str_detect(Category, "Owner: Asian")) %>% View()
+
+tmp <- df %>% 
+  filter(Location == "United States",
+         totals == 1)
+
+sum(tmp$Population, na.rm = TRUE)
+
+# 346018636 age
+# 365810749 race -> there appears to be some double counting with the 2+ races
+# 346018636 agg
+print(df %>% filter(is.na(Population)) %>% select(Year, Location, race),
+      row.names = FALSE)
+# some of the cities do not have a Population Count for Native American and other Pacific Islander owners
+
+```
